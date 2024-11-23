@@ -350,7 +350,7 @@ namespace CriticalCommonLib.Services
         private unsafe delegate void* NpcSpawnData(int* a1, int a2, int* a3);
          
         //If the signature for these are ever lost, find the ProcessZonePacketDown signature in Dalamud and then find the relevant function based on the opcode.
-        [Signature("E8 ?? ?? ?? ?? E9 ?? ?? ?? ?? 48 8B D3 8B CE E8 ?? ?? ?? ?? E9 ?? ?? ?? ?? 48 8B D3 8B CE E8 ?? ?? ?? ?? E9 ?? ?? ?? ?? 48 8B D3 8B CE E8 ?? ?? ?? ?? E9 ?? ?? ?? ?? 48 8D 53 10 ", DetourName = nameof(ContainerInfoDetour), UseFlags = SignatureUseFlags.Hook)]
+        [Signature("48 89 74 24 ?? 57 48 81 EC 80 00 00 00 44 0F B7 42", DetourName = nameof(ContainerInfoDetour), UseFlags = SignatureUseFlags.Hook)]
         private Hook<ContainerInfoNetworkData>? _containerInfoNetworkHook = null;
 
         [Signature(
