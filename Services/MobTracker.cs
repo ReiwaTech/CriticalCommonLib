@@ -38,12 +38,12 @@ namespace CriticalCommonLib.Services
         }
 
         private Dictionary<uint, Dictionary<uint, List<MobSpawnPosition>>> positions = new Dictionary<uint, Dictionary<uint, List<MobSpawnPosition>>>();
-        
+
         private unsafe delegate void* NpcSpawnData(int* a1, int a2, int* a3);
-        
-        [Signature("E8 ?? ?? ?? ?? F6 05 ?? ?? ?? ?? ?? 75 86", DetourName = nameof(NpcSpawnDetour), UseFlags = SignatureUseFlags.Hook)]
+
+        [Signature("40 53 41 54 41 55 41 57 48 83 EC 28 44 0F B6 91", DetourName = nameof(NpcSpawnDetour), UseFlags = SignatureUseFlags.Hook)]
         private readonly Hook<NpcSpawnData>? _npcSpawnHook = null;
-        
+
         public void AddEntry(MobSpawnPosition spawnPosition)
         {
             positions.TryAdd(spawnPosition.TerritoryTypeId, new Dictionary<uint, List<MobSpawnPosition>>());
@@ -75,8 +75,8 @@ namespace CriticalCommonLib.Services
 
         private bool WithinRange(Vector3 pointA, Vector3 pointB, float maxRange)
         {
-            RectangleF recA = new RectangleF( new PointF(pointA.X - maxRange, pointA.Y - maxRange), new SizeF(maxRange,maxRange));
-            RectangleF recB = new RectangleF( new PointF(pointB.X - maxRange, pointB.Y - maxRange), new SizeF(maxRange,maxRange));
+            RectangleF recA = new RectangleF(new PointF(pointA.X - maxRange, pointA.Y - maxRange), new SizeF(maxRange, maxRange));
+            RectangleF recB = new RectangleF(new PointF(pointB.X - maxRange, pointB.Y - maxRange), new SizeF(maxRange, maxRange));
             return recA.IntersectsWith(recB);
         }
 
@@ -124,22 +124,22 @@ namespace CriticalCommonLib.Services
 
         public bool SaveCsv(string filePath, List<MobSpawnPosition> positions)
         {
-            using var fileStream = new FileStream( filePath, FileMode.Create );
-            using( StreamWriter reader = new StreamWriter( fileStream ) )
+            using var fileStream = new FileStream(filePath, FileMode.Create);
+            using (StreamWriter reader = new StreamWriter(fileStream))
             {
                 try
                 {
-                    using var csvReader = new CSVFile.CSVWriter( reader );
+                    using var csvReader = new CSVFile.CSVWriter(reader);
                     csvReader.WriteLine(MobSpawnPosition.GetHeaders());
-                    foreach( var position in positions )
+                    foreach (var position in positions)
                     {
-                        var linePosition = position.ToCsv( );
+                        var linePosition = position.ToCsv();
                         csvReader.WriteLine(linePosition);
                     }
-                    
+
                     return true;
                 }
-                catch( Exception )
+                catch (Exception)
                 {
                     return false;
                 }
@@ -178,22 +178,22 @@ namespace CriticalCommonLib.Services
 
             return new List<MobSpawnPosition>();
         }
-        
+
 
         public void ClearSavedData()
         {
-            
+
         }
 
         private void Dispose(bool disposing)
         {
-            if(!_disposed && disposing)
+            if (!_disposed && disposing)
             {
                 _npcSpawnHook?.Dispose();
             }
-            _disposed = true;         
+            _disposed = true;
         }
-        
+
         ~MobTracker()
         {
 #if DEBUG
@@ -205,7 +205,7 @@ namespace CriticalCommonLib.Services
                 Service.Log.Error("There is a disposable object which hasn't been disposed before the finalizer call: " + (this.GetType ().Name));
             }
 #endif
-            Dispose (true);
+            Dispose(true);
         }
     }
 }
