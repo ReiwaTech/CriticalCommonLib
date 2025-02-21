@@ -8,7 +8,7 @@ namespace CriticalCommonLib.Agents
     //Not really an agent but seems a good as spot as any
     public unsafe class CraftingAgent
     {
-        private const int OffsetCraftingAgent = 368;
+        private const int OffsetCraftingAgent = 376;
 
         private const int OffsetStep       = 248;
         private const int OffsetStatus     = 200;
@@ -68,17 +68,17 @@ namespace CriticalCommonLib.Agents
         public uint ResultItemId
             => _agent == null ? 0 : *(uint*)(_agent + OffsetResultItemId);
 
-        public uint CraftType => (uint) (Service.ClientState.LocalPlayer?.ClassJob.GameData?.DohDolJobIndex ?? 0);
-        
+        public uint CraftType => (uint) (Service.ClientState.LocalPlayer?.ClassJob.ValueNullable?.DohDolJobIndex ?? 0);
+
         public uint Recipe
         {
             get
             {
-                if (Service.ExcelCache.GetRecipeExSheet()
-                    .Any(c => c.CraftType.Row == CraftType && c.ItemResult.Row == ResultItemId))
+                if (Service.ExcelCache.GetRecipeSheet()
+                    .Any(c => c.Base.CraftType.RowId == CraftType && c.Base.ItemResult.RowId == ResultItemId))
                 {
-                    return Service.ExcelCache.GetRecipeExSheet()
-                        .Single(c => c.CraftType.Row == CraftType && c.ItemResult.Row == ResultItemId).RowId;
+                    return Service.ExcelCache.GetRecipeSheet()
+                        .Single(c => c.Base.CraftType.RowId == CraftType && c.Base.ItemResult.RowId == ResultItemId).RowId;
                 }
 
                 return 0;

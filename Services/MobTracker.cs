@@ -7,6 +7,7 @@ using System.Numerics;
 using Dalamud.Hooking;
 using Dalamud.Plugin.Services;
 using Dalamud.Utility.Signatures;
+using Lumina.Excel.Sheets;
 using LuminaSupplemental.Excel.Model;
 
 namespace CriticalCommonLib.Services
@@ -14,11 +15,16 @@ namespace CriticalCommonLib.Services
     public class MobTracker : IMobTracker
     {
         private readonly IGameInteropProvider _gameInteropProvider;
+        private readonly IFramework _framework;
+        private readonly IPluginLog _pluginLog;
 
-        public MobTracker(IGameInteropProvider gameInteropProvider)
+        public MobTracker(IGameInteropProvider gameInteropProvider, IFramework framework, IPluginLog pluginLog)
         {
+            pluginLog.Verbose("Creating {type} ({this})", GetType().Name, this);
             _gameInteropProvider = gameInteropProvider;
-            _gameInteropProvider.InitializeFromAttributes(this);
+            _framework = framework;
+            _pluginLog = pluginLog;
+            framework.RunOnFrameworkThread(() => { _gameInteropProvider.InitializeFromAttributes(this); });;
         }
 
         private bool _enabled;
@@ -28,27 +34,33 @@ namespace CriticalCommonLib.Services
         public void Enable()
         {
             _enabled = true;
-            _npcSpawnHook?.Enable();
+            _framework.RunOnFrameworkThread(() =>
+            {
+                _npcSpawnHook?.Enable();
+            });
         }
 
         public void Disable()
         {
             _enabled = false;
-            _npcSpawnHook?.Disable();
+            _framework.RunOnFrameworkThread(() =>
+            {
+                _npcSpawnHook?.Disable();
+            });
         }
 
         private Dictionary<uint, Dictionary<uint, List<MobSpawnPosition>>> positions = new Dictionary<uint, Dictionary<uint, List<MobSpawnPosition>>>();
 
         private unsafe delegate void* NpcSpawnData(int* a1, int a2, int* a3);
 
-        [Signature("40 53 41 54 41 55 41 57 48 83 EC 28 44 0F B6 91", DetourName = nameof(NpcSpawnDetour), UseFlags = SignatureUseFlags.Hook)]
+        [Signature("E8 ?? ?? ?? ?? F6 05 ?? ?? ?? ?? ?? 75 91", DetourName = nameof(NpcSpawnDetour), UseFlags = SignatureUseFlags.Hook)]
         private readonly Hook<NpcSpawnData>? _npcSpawnHook = null;
 
         public void AddEntry(MobSpawnPosition spawnPosition)
         {
             positions.TryAdd(spawnPosition.TerritoryTypeId, new Dictionary<uint, List<MobSpawnPosition>>());
             positions[spawnPosition.TerritoryTypeId].TryAdd(spawnPosition.BNpcNameId, new List<MobSpawnPosition>());
-            //Store 
+            //Store
             var existingPositions = positions[spawnPosition.TerritoryTypeId][spawnPosition.BNpcNameId];
             if (!existingPositions.Any(c => WithinRange(spawnPosition.Position, c.Position, maxRange)))
             {
@@ -88,14 +100,14 @@ namespace CriticalCommonLib.Services
                 {
                     var ptr = (IntPtr)a3;
                     var npcSpawnInfo = NetworkDecoder.DecodeNpcSpawn(ptr);
-                    var bNpcName = Service.ExcelCache.GetBNpcNameExSheet().GetRow(npcSpawnInfo.bNpcName);
+                    var bNpcName = Service.Data.GetExcelSheet<BNpcName>().GetRowOrDefault(npcSpawnInfo.bNpcName);
                     if (bNpcName != null)
                     {
-                        var map = Service.ExcelCache.GetTerritoryTypeExSheet().GetRow(Service.ClientState.TerritoryType)?.MapEx?.Value;
+                        var map = Service.Data.GetExcelSheet<TerritoryType>().GetRowOrDefault(Service.ClientState.TerritoryType)?.Map.ValueNullable;
                         if (map != null)
                         {
-                            var newPos = Utils.WorldToMap(npcSpawnInfo.pos, map.SizeFactor,
-                                map.OffsetX, map.OffsetY);
+                            var newPos = Utils.WorldToMap(npcSpawnInfo.pos, map.Value.SizeFactor,
+                                map.Value.OffsetX, map.Value.OffsetY);
                             MobSpawnPosition mobSpawnPosition = new MobSpawnPosition(npcSpawnInfo.bNpcBase,
                                 npcSpawnInfo.bNpcName, Service.ClientState.TerritoryType, newPos,
                                 npcSpawnInfo.subtype);
@@ -189,6 +201,7 @@ namespace CriticalCommonLib.Services
         {
             if (!_disposed && disposing)
             {
+                _pluginLog.Verbose("Disposing {type} ({this})", GetType().Name, this);
                 _npcSpawnHook?.Dispose();
             }
             _disposed = true;

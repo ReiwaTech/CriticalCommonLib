@@ -14,7 +14,8 @@ using FFXIVClientStructs.FFXIV.Client.Graphics;
 using FFXIVClientStructs.FFXIV.Client.System.String;
 using ImGuiNET;
 using Lumina.Excel;
-using Lumina.Excel.GeneratedSheets;
+using Lumina.Excel.Sheets;
+
 
 namespace CriticalCommonLib
 {
@@ -22,11 +23,25 @@ namespace CriticalCommonLib
     {
         public static Vector4 ConvertUiColorToColor(UIColor uiColor)
         {
-            var temp = BitConverter.GetBytes(uiColor.UIForeground);
+            return ConvertUiColorToColor(uiColor.UIForeground);
+        }
+
+        public static Vector4 ConvertUiColorToColor(uint color)
+        {
+            var temp = BitConverter.GetBytes(color);
             return new Vector4((float) temp[3] / 255,
                 (float) temp[2] / 255,
                 (float) temp[1] / 255,
                 (float) temp[0] / 255);
+        }
+
+        public static Vector4 Convert3ChannelUintToColorVector4(uint color)
+        {
+            var temp = BitConverter.GetBytes(color);
+            return new Vector4((float) temp[2] / 255,
+                (float) temp[1] / 255,
+                (float) temp[0] / 255,
+                1.0f);
         }
 
         public static string GenerateRandomId()
@@ -43,14 +58,14 @@ namespace CriticalCommonLib
             var finalString = new String(stringChars);
             return finalString;
         }
-        
+
         public static unsafe SeString ReadSeString(Utf8String xivString) {
             var len = (int) (xivString.BufUsed > int.MaxValue ? int.MaxValue : xivString.BufUsed);
             var bytes = new byte[len];
             Marshal.Copy(new IntPtr(xivString.StringPtr), bytes, 0, len);
             return SeString.Parse(bytes);
         }
-        
+
         public static ByteColor ColorFromHex(string hexString, int alpha)
         {
             if (hexString.IndexOf('#') != -1)
@@ -66,7 +81,7 @@ namespace CriticalCommonLib
         {
             return new () {R = (byte) (hexString.X * 0xFF), B = (byte) (hexString.Z * 0xFF), G = (byte) (hexString.Y * 0xFF), A = (byte) (hexString.W * 0xFF)};
         }
-        
+
         private static ulong _beginModule;
         private static ulong _endModule;
         public static void ClickToCopyText(string text, string? textCopy = null) {
@@ -78,7 +93,7 @@ namespace CriticalCommonLib
             }
             if (ImGui.IsItemClicked()) ImGui.SetClipboardText($"{textCopy}");
         }
-        
+
         public static unsafe void PrintOutObject(object obj, ulong addr, List<string> path, bool autoExpand = false, string? headerText = null) {
             if (obj is Utf8String utf8String) {
 
@@ -183,7 +198,7 @@ namespace CriticalCommonLib
             if (pushedColor > 0) ImGui.PopStyleColor(pushedColor);
 
         }
-        
+
         private static unsafe void PrintOutValue(ulong addr, List<string> path, Type type, object value, MemberInfo member) {
             try {
                 var valueParser = member.GetCustomAttribute(typeof(ValueParser));
@@ -233,7 +248,7 @@ namespace CriticalCommonLib
 
                     } else if (!type.IsPrimitive) {
                         switch (value) {
-                            case ILazyRow ilr:
+                            case RowRef ilr:
                                 var p = ilr.GetType().GetProperty("Value", BindingFlags.Public | BindingFlags.Instance);
                                 if (p != null) {
                                     var getter = p.GetGetMethod();
@@ -273,7 +288,7 @@ namespace CriticalCommonLib
             }
 
         }
-        
+
         public static Vector3 WorldToMap(Vector3 pos, ushort sizeFactor, short offsetX, short offsetY) {
             var scale = sizeFactor / 100f;
             var x = (10 - ((pos.X + offsetX) * scale + 1024f) * -0.2f / scale) / 10f;
@@ -285,7 +300,7 @@ namespace CriticalCommonLib
 
         public static string ToTitleCase(string npcNameSingular)
         {
-            return CultureInfo.CurrentCulture.TextInfo.ToTitleCase(npcNameSingular.ToLower()); 
+            return CultureInfo.CurrentCulture.TextInfo.ToTitleCase(npcNameSingular.ToLower());
         }
     }
 }

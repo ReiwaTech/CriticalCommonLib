@@ -7,7 +7,7 @@ namespace CriticalCommonLib.Addons
     public struct AddonHousingGoods
     {
         [FieldOffset(0)] public AtkUnitBase AtkUnitBase;
-        [FieldOffset(825)] public byte CurrentTab;
+        [FieldOffset(833)] public byte CurrentTab;
 
     }
 }

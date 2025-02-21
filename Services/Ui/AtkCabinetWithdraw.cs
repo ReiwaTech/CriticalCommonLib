@@ -2,13 +2,16 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using AllaganLib.GameSheets.Sheets;
+using AllaganLib.GameSheets.Sheets.Rows;
 using CriticalCommonLib.Agents;
 using Dalamud.Game.Text.SeStringHandling.Payloads;
 using Dalamud.Interface.Colors;
 using Dalamud.Memory;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
-using Lumina.Excel.GeneratedSheets;
+using Lumina.Excel.Sheets;
+
 
 namespace CriticalCommonLib.Services.Ui
 {
@@ -21,7 +24,7 @@ namespace CriticalCommonLib.Services.Ui
         private uint RadioButtonOffset = 12;
         private uint ListComponentNodeId = 30;
 
-        public unsafe CabinetCategory? CurrentTab
+        public unsafe CabinetCategoryRow? CurrentTab
         {
             get
             {
@@ -34,7 +37,7 @@ namespace CriticalCommonLib.Services.Ui
             }
         }
 
-        private CabinetCategory? _storedTab;
+        private CabinetCategoryRow? _storedTab;
 
         public override void Update()
         {
@@ -54,7 +57,7 @@ namespace CriticalCommonLib.Services.Ui
             if (listComponentNode == null || (ushort) listComponentNode->AtkResNode.Type < 1000) return;
             var component = (AtkComponentTreeList*) listComponentNode->Component;
             var list = component->Items;
-            foreach(var listItem in list.Span)
+            foreach(var listItem in list.AsSpan())
             {
                 var uldManager = listItem.Value->Renderer->AtkComponentButton.AtkComponentBase.UldManager;
                 if (uldManager.NodeListCount < 4) continue;

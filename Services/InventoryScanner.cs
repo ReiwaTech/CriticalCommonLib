@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using AllaganLib.GameSheets.Sheets;
+using AllaganLib.GameSheets.Sheets.Helpers;
 using CriticalCommonLib.Addons;
 using CriticalCommonLib.Extensions;
 using CriticalCommonLib.GameStructs;
@@ -15,6 +17,8 @@ using FFXIVClientStructs.FFXIV.Client.Game.UI;
 using FFXIVClientStructs.FFXIV.Client.System.Framework;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Client.UI.Misc;
+using Lumina.Excel;
+using Lumina.Excel.Sheets;
 using InventoryItem = FFXIVClientStructs.FFXIV.Client.Game.InventoryItem;
 
 namespace CriticalCommonLib.Services
@@ -39,32 +43,62 @@ namespace CriticalCommonLib.Services
         private bool _running;
         private readonly ICharacterMonitor _characterMonitor;
         private readonly IGameUiManager _gameUiManager;
+        private readonly IFramework _framework;
         private IGameInterface _gameInterface;
         private IOdrScanner _odrScanner;
         private readonly IGameInteropProvider _gameInteropProvider;
+        private readonly CabinetSheet _cabinetSheet;
+        private readonly IPluginLog _pluginLog;
+        private readonly ExcelSheet<MirageStoreSetItem> _mirageStoreSetItemSheet;
         public DateTime? _lastStorageCheck;
         public DateTime? _nextBagScan;
 
-        public InventoryScanner(ICharacterMonitor characterMonitor, IGameUiManager gameUiManager,
-            IGameInterface gameInterface, IOdrScanner odrScanner, IGameInteropProvider gameInteropProvider, ExcelCache excelCache)
+        public InventoryScanner(ICharacterMonitor characterMonitor, IGameUiManager gameUiManager, IFramework framework,
+            IGameInterface gameInterface, IOdrScanner odrScanner, IGameInteropProvider gameInteropProvider, CabinetSheet cabinetSheet, ExcelSheet<MirageStoreSetItem> mirageStoreSetItemSheet, IPluginLog pluginLog)
         {
             _gameUiManager = gameUiManager;
+            _framework = framework;
             _characterMonitor = characterMonitor;
             _gameInterface = gameInterface;
             _odrScanner = odrScanner;
             _gameInteropProvider = gameInteropProvider;
-            _gameInteropProvider.InitializeFromAttributes(this);
-            _containerInfoNetworkHook?.Enable();
-            _itemMarketBoardInfoHook?.Enable();
+            _cabinetSheet = cabinetSheet;
+            _mirageStoreSetItemSheet = mirageStoreSetItemSheet;
+            _pluginLog = pluginLog;
+
+            _mirageSetLookup = _mirageStoreSetItemSheet.ToDictionary(c => c.RowId, c => new List<uint>()
+            {
+                c.Unknown0, c.Unknown1, c.Unknown2, c.Unknown3, c.Unknown4, c.Unknown5, c.Unknown6, c.Unknown7,
+                c.Unknown8, c.Unknown9, c.Unknown10
+            }.Where(c => c != 0).Distinct().ToHashSet());
+
+            _mirageSetItemLookup = new Dictionary<uint, HashSet<uint>>();
+
+            foreach (var set in _mirageSetLookup)
+            {
+                foreach (var setItem in set.Value)
+                {
+                    _mirageSetItemLookup.TryAdd(setItem, new HashSet<uint>());
+                    _mirageSetItemLookup[setItem].Add(set.Key);
+                }
+            }
+
+
+            _framework.RunOnFrameworkThread(() =>
+            {
+                _gameInteropProvider.InitializeFromAttributes(this);
+                _containerInfoNetworkHook?.Enable();
+                _itemMarketBoardInfoHook?.Enable();
+            });
+            framework.Update += FrameworkOnUpdate;
             _gameUiManager.UiVisibilityChanged += GameUiManagerOnUiManagerVisibilityChanged;
             _characterMonitor.OnCharacterUpdated += CharacterMonitorOnOnCharacterUpdated;
             _characterMonitor.OnActiveRetainerChanged += CharacterMonitorOnOnActiveRetainerChanged;
             _characterMonitor.OnActiveFreeCompanyChanged += CharacterMonitorOnOnActiveFreeCompanyChanged;
             _characterMonitor.OnActiveHouseChanged += CharacterMonitorOnOnActiveHouseChanged;
             _odrScanner.OnSortOrderChanged += SortOrderChanged;
-            Armoire = new InventoryItem[excelCache.GetCabinetSheet().Count()];
-            GlamourChest = new InventoryItem[excelCache.GlamourChestSize];
-            Service.Framework.Update += FrameworkOnUpdate;
+            Armoire = new InventoryItem[cabinetSheet.Count()];
+            GlamourChest = new InventoryItem[HardcodedItems.GlamourChestSize];
             Service.Log.Verbose("Starting service {type} ({this})", GetType().Name, this);
         }
 
@@ -388,10 +422,13 @@ namespace CriticalCommonLib.Services
                     var containerInfo = NetworkDecoder.DecodeContainerInfo(ptr);
                     if (Enum.IsDefined(typeof(InventoryType), containerInfo.containerId))
                     {
-                        //Service.Log.Verbose("Container update " + containerInfo.containerId.ToString());
+                        // _framework.RunOnFrameworkThread(() =>
+                        // {
+                        //     _pluginLog.Verbose("Container update " + containerInfo.containerId.ToString());
+                        // });
                         var inventoryType = (InventoryType)containerInfo.containerId;
                         //Delay just in case the items haven't loaded.
-                        Service.Framework.RunOnTick(() =>
+                        _framework.RunOnTick(() =>
                             {
                                 _loadedInventories.Add(inventoryType);
                                 ContainerInfoReceived?.Invoke(containerInfo, inventoryType);
@@ -403,7 +440,10 @@ namespace CriticalCommonLib.Services
             }
             catch (Exception e)
             {
-                Service.Log.Error(e, "shits broke yo");
+                _framework.RunOnFrameworkThread(() =>
+                {
+                    _pluginLog.Error(e, "shits broke yo");
+                });
             }
 
             return _containerInfoNetworkHook!.Original(seq, a3);
@@ -454,26 +494,33 @@ namespace CriticalCommonLib.Services
                 {
                     var changeSet = new BagChangeContainer();
                     var inventorySortOrder = _odrScanner.GetSortOrder(Service.ClientState.LocalContentId);
-                    if(inventorySortOrder != null)
+                    bool gearSetsChanged = false;
+                    if (inventorySortOrder != null)
                     {
                         ParseCharacterBags(inventorySortOrder, changeSet);
                         ParseSaddleBags(inventorySortOrder, changeSet);
                         ParsePremiumSaddleBags(inventorySortOrder, changeSet);
                         ParseArmouryChest(inventorySortOrder, changeSet);
-                        ParseCharacterEquipped(inventorySortOrder, changeSet);
-                        ParseFreeCompanyBags(inventorySortOrder, changeSet);
-                        ParseHouseBags(inventorySortOrder, changeSet);
-                        ParseArmoire(inventorySortOrder, changeSet);
-                        ParseGlamourChest(inventorySortOrder, changeSet);
                         ParseRetainerBags(inventorySortOrder, changeSet);
-                        ParseGearSets(inventorySortOrder, changeSet);
                     }
+
+                    ParseCharacterEquipped(changeSet);
+                    ParseFreeCompanyBags(changeSet);
+                    ParseHouseBags(changeSet);
+                    ParseArmoire(changeSet);
+                    ParseGlamourChest(changeSet);
+                    gearSetsChanged = ParseGearSets(changeSet);
 
 
                     if (changeSet.HasChanges && changeSet.changes != null)
                     {
-                        Service.Framework.RunOnFrameworkThread(() => Service.Log.Verbose($"Change count: {changeSet.changes.Count}"));
-                        Service.Framework.RunOnFrameworkThread(() => BagsChanged?.Invoke(changeSet.changes));
+                        _framework.RunOnFrameworkThread(() => Service.Log.Verbose($"Change count: {changeSet.changes.Count}"));
+                        _framework.RunOnFrameworkThread(() => BagsChanged?.Invoke(changeSet.changes));
+                    }
+                    else if (gearSetsChanged)
+                    {
+                        _framework.RunOnFrameworkThread(() => Service.Log.Verbose($"Gearsets changed"));
+                        _framework.RunOnFrameworkThread(() => BagsChanged?.Invoke(new List<BagChange>()));
                     }
                 }
 
@@ -481,9 +528,9 @@ namespace CriticalCommonLib.Services
             }
             catch (Exception e)
             {
-                Service.Framework.RunOnFrameworkThread(() => Service.Log.Error("The inventory scanner has crashed. Details below:"));
-                Service.Framework.RunOnFrameworkThread(() => Service.Log.Error(e.ToString()));
-                Service.Framework.RunOnFrameworkThread(() => Service.Log.Error("Attempting to restart the scanner in 20 seconds."));
+                _framework.RunOnFrameworkThread(() => Service.Log.Error("The inventory scanner has crashed. Details below:"));
+                _framework.RunOnFrameworkThread(() => Service.Log.Error(e.ToString()));
+                _framework.RunOnFrameworkThread(() => Service.Log.Error("Attempting to restart the scanner in 20 seconds."));
                 _nextBagScan = DateTime.Now.AddMilliseconds(20000);
             }
         }
@@ -765,6 +812,7 @@ namespace CriticalCommonLib.Services
 
         }
 
+        public HashSet<InventoryType> LoadedInventories => _loadedInventories;
         public HashSet<InventoryType> InMemory { get; } = new();
         public Dictionary<ulong, HashSet<InventoryType>> InMemoryRetainers { get; } = new();
         public Dictionary<ulong, HashSet<InventoryType>> InMemoryFreeCompanies { get; } = new();
@@ -883,7 +931,7 @@ namespace CriticalCommonLib.Services
             var currency = InventoryManager.Instance()->GetInventoryContainer(InventoryType.Currency);
             if (_currencyItemIds == null)
             {
-                _currencyItemIds = Service.ExcelCache.GetItemExSheet().Where(c => c.RowId is >= 20 and <= 60 && c.FilterGroup == 16 || c.ItemUICategory.Row == 100 || c.RowId == 1).Select(c => c.RowId).ToList();
+                _currencyItemIds = Service.ExcelCache.GetItemSheet().Where(c => c.RowId is >= 20 and <= 60 && c.Base.FilterGroup == 16 || c.Base.ItemUICategory.RowId == 100 || c.RowId == 1).Select(c => c.RowId).ToList();
             }
 
             if (bag0 != null && bag1 != null && bag2 != null && bag3 != null && crystals != null && currency != null)
@@ -1025,7 +1073,7 @@ namespace CriticalCommonLib.Services
                             var fakeInventoryItem = new InventoryItem();
                             fakeInventoryItem.ItemId = currencyItemId;
                             fakeInventoryItem.Slot = slot;
-                            fakeInventoryItem.Quantity = (uint)itemCount;
+                            fakeInventoryItem.Quantity = itemCount;
                             fakeInventoryItem.Container = InventoryType.Currency;
                             fakeInventoryItem.Flags = InventoryItem.ItemFlags.None;
                             fakeInventoryItem.GlamourId = 0;
@@ -1302,7 +1350,7 @@ namespace CriticalCommonLib.Services
             }
         }
 
-        public unsafe void ParseCharacterEquipped(InventorySortOrder currentSortOrder, BagChangeContainer changeSet)
+        public unsafe void ParseCharacterEquipped(BagChangeContainer changeSet)
         {
             var gearSet0 = InventoryManager.Instance()->GetInventoryContainer(InventoryType.EquippedItems);
             if (gearSet0 != null && gearSet0->Loaded != 0)
@@ -1321,7 +1369,7 @@ namespace CriticalCommonLib.Services
             }
         }
 
-        public unsafe void ParseHouseBags(InventorySortOrder currentSortOrder, BagChangeContainer changeSet)
+        public unsafe void ParseHouseBags(BagChangeContainer changeSet)
         {
             for (var b = 0; b < _houseBagTypes.Length; b++)
             {
@@ -1418,7 +1466,7 @@ namespace CriticalCommonLib.Services
             }
         }
 
-        public unsafe void ParseFreeCompanyBags(InventorySortOrder currentSortOrder, BagChangeContainer changeSet)
+        public unsafe void ParseFreeCompanyBags(BagChangeContainer changeSet)
         {
             for (var b = 0; b < _freeCompanyBagTypes.Length; b++)
             {
@@ -1479,7 +1527,7 @@ namespace CriticalCommonLib.Services
                 var fakeCreditItem = new InventoryItem();
                 fakeCreditItem.ItemId = 80;
                 fakeCreditItem.Container = (InventoryType)Enums.InventoryType.FreeCompanyCurrency;
-                fakeCreditItem.Quantity = (uint)fcCredit;
+                fakeCreditItem.Quantity = fcCredit;
                 fakeCreditItem.Slot = 0;
                 fakeCreditItem.Flags = InventoryItem.ItemFlags.None;
                 InMemory.Add((InventoryType)Enums.InventoryType.FreeCompanyCurrency);
@@ -1493,7 +1541,7 @@ namespace CriticalCommonLib.Services
         }
 
 
-        public unsafe void ParseArmoire(InventorySortOrder currentSortOrder, BagChangeContainer changeSet)
+        public unsafe void ParseArmoire(BagChangeContainer changeSet)
         {
             if (!_loadedInventories.Contains((InventoryType)Enums.InventoryType.Armoire))
             {
@@ -1510,12 +1558,13 @@ namespace CriticalCommonLib.Services
             InMemory.Add((InventoryType)Enums.InventoryType.Armoire);
 
             var index = 0;
-            foreach (var itemId in Service.ExcelCache.GetArmoireItems())
+            for (uint rowId = _cabinetSheet.StartRow; rowId < _cabinetSheet.StartRow + _cabinetSheet.Count; rowId++)
             {
+                var itemId = _cabinetSheet[rowId].Item.RowId;
                 var isInArmoire = _gameInterface.IsInArmoire(itemId);
                 var armoireItem = new InventoryItem
                 {
-                    Slot = (short)index, ItemId = isInArmoire ? itemId : 0, Quantity = isInArmoire ? 1u : 0u,
+                    Slot = (short)index, ItemId = isInArmoire ? itemId : 0, Quantity = isInArmoire ? 1 : 0,
                     Flags = InventoryItem.ItemFlags.None
                 };
                 if (index >= 0 && index < Armoire.Length)
@@ -1541,7 +1590,7 @@ namespace CriticalCommonLib.Services
         private bool _glamourAgentActive;
         private readonly TimeSpan _glamourAgentWait = TimeSpan.FromMilliseconds(500);
         private DateTime? _glamourAgentOpened;
-        public unsafe void ParseGlamourChest(InventorySortOrder currentSortOrder, BagChangeContainer changeSet)
+        public unsafe void ParseGlamourChest(BagChangeContainer changeSet)
         {
             var agents = Framework.Instance()->UIModule->GetAgentModule();
             var dresserAgent = (AgentMiragePrismPrismBox*)agents->GetAgentByInternalId(AgentId.MiragePrismPrismBox);
@@ -1564,10 +1613,32 @@ namespace CriticalCommonLib.Services
             _glamourAgentOpened = null;
 
             InMemory.Add((InventoryType)Enums.InventoryType.GlamourChest);
+            HashSet<uint> currentSets = new();
 
             short index = 0;
-            foreach (var chestItem in dresserAgent->Data->PrismBoxItems)
+
+            for (var i = 0; i < HardcodedItems.GlamourChestSize; i++)
             {
+                var chestItem = dresserAgent->Data->PrismBoxItems[i];
+                var flags = InventoryItem.ItemFlags.None;
+                var itemId = chestItem.ItemId;
+                if (itemId >= 1_000_000)
+                {
+                    itemId -= 1_000_000;
+                    flags = InventoryItem.ItemFlags.HighQuality;
+                }
+
+                if (_mirageSetLookup.ContainsKey(itemId))
+                {
+                    currentSets.Add(itemId);
+                }
+            }
+
+
+
+            for (var i = 0; i < HardcodedItems.GlamourChestSize; i++)
+            {
+                var chestItem = dresserAgent->Data->PrismBoxItems[i];
                 var flags = InventoryItem.ItemFlags.None;
                 var itemId = chestItem.ItemId;
                 if (itemId >= 1_000_000)
@@ -1578,16 +1649,34 @@ namespace CriticalCommonLib.Services
 
                 var glamourItem = new InventoryItem
                 {
-                    Slot = (short)chestItem.Slot, ItemId = itemId, Quantity = itemId != 0 ? 1u : 0u, Flags = flags, Spiritbond = (ushort)index
+                    Slot = (short)chestItem.Slot, ItemId = itemId, Quantity = itemId != 0 ? 1 : 0, Flags = flags, Spiritbond = (ushort)index
                 };
                 glamourItem.Stains[0] = chestItem.Stains[0];
                 glamourItem.Stains[1] = chestItem.Stains[1];
-
-                if (!glamourItem.IsSame(GlamourChest[index],false))
+                if (_mirageSetItemLookup.ContainsKey(itemId))
                 {
-                    GlamourChest[index] = glamourItem;
-                    //Push a custom inventory type
-                    changeSet.Add(new BagChange(glamourItem, (InventoryType)Enums.InventoryType.GlamourChest));
+                    var potentialSets = _mirageSetItemLookup[itemId];
+                    foreach (var potentialSet in potentialSets)
+                    {
+                        if (currentSets.Contains(potentialSet))
+                        {
+                            glamourItem.GlamourId = potentialSet;
+                        }
+                    }
+                }
+
+                if (index >= 0 && index < GlamourChest.Length)
+                {
+                    if (!glamourItem.IsSame(GlamourChest[index], false))
+                    {
+                        GlamourChest[index] = glamourItem;
+                        //Push a custom inventory type
+                        changeSet.Add(new BagChange(glamourItem, (InventoryType)Enums.InventoryType.GlamourChest));
+                    }
+                }
+                else
+                {
+                    _pluginLog.Verbose($"Glamour chest appears to be longer than {GlamourChest.Length}, hit {index}.");
                 }
 
                 index++;
@@ -1964,12 +2053,13 @@ namespace CriticalCommonLib.Services
             }
         }
 
-        public unsafe void ParseGearSets(InventorySortOrder currentSortOrder, BagChangeContainer changeSet)
+        public unsafe bool ParseGearSets(BagChangeContainer changeSet)
         {
+            bool gearSetsChanged = false;
             var gearSetModule = RaptureGearsetModule.Instance();
             if (gearSetModule == null)
             {
-                return;
+                return false;
             }
 
             for (byte i = 0; i < gearSetModule->Entries.Length; i++)
@@ -1977,7 +2067,12 @@ namespace CriticalCommonLib.Services
                 var gearSet = gearSetModule->Entries[i];
                 if (gearSet.Flags.HasFlag(RaptureGearsetModule.GearsetFlag.Exists))
                 {
-                    GearSetsUsed[i] = true;
+                    if (GearSetsUsed[i] != true)
+                    {
+                        GearSetsUsed[i] = true;
+                        gearSetsChanged = true;
+                    }
+
                     var gearSetName = gearSet.NameString;
                     GearSetNames[i] = gearSetName;
 
@@ -1997,14 +2092,24 @@ namespace CriticalCommonLib.Services
                     {
                         var gearSetItem = gearSetItems[index];
                         var itemId = gearSetItem.ItemId;
-                        GearSets[i][index] = itemId;
+                        if (GearSets[i][index] != itemId)
+                        {
+                            gearSetsChanged = true;
+                            GearSets[i][index] = itemId;
+                        }
                     }
                 }
                 else
                 {
-                    GearSetsUsed[i] = false;
+                    if (GearSetsUsed[i] != false)
+                    {
+                        gearSetsChanged = true;
+                        GearSetsUsed[i] = false;
+                    }
                 }
             }
+
+            return gearSetsChanged;
         }
 
         private bool _disposed;
@@ -2047,11 +2152,14 @@ namespace CriticalCommonLib.Services
             InventoryType.HousingExteriorStoreroom,
         };
 
-        private InventoryType[] _freeCompanyBagTypes = {
+        private readonly InventoryType[] _freeCompanyBagTypes = {
             InventoryType.FreeCompanyPage1, InventoryType.FreeCompanyPage2, InventoryType.FreeCompanyPage3,
             InventoryType.FreeCompanyPage4, InventoryType.FreeCompanyPage5, InventoryType.FreeCompanyGil,
             InventoryType.FreeCompanyCrystals
         };
+
+        private readonly Dictionary<uint,HashSet<uint>> _mirageSetLookup;
+        private readonly Dictionary<uint,HashSet<uint>> _mirageSetItemLookup;
 
         public void Dispose()
         {
@@ -2063,8 +2171,9 @@ namespace CriticalCommonLib.Services
         {
             if(!_disposed && disposing)
             {
+                _pluginLog.Verbose("Disposing {type} ({this})", GetType().Name, this);
                 _running = false;
-                Service.Framework.Update -= FrameworkOnUpdate;
+                _framework.Update -= FrameworkOnUpdate;
                 _containerInfoNetworkHook?.Dispose();
                 _itemMarketBoardInfoHook?.Dispose();
                 _containerInfoNetworkHook = null;

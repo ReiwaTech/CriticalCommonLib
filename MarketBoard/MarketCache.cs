@@ -5,7 +5,10 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using CriticalCommonLib.Services.Mediator;
+
+using Lumina.Excel.Sheets;
 using LuminaSupplemental.Excel.Model;
+using LuminaSupplemental.Excel.Services;
 
 namespace CriticalCommonLib.MarketBoard
 {
@@ -14,7 +17,7 @@ namespace CriticalCommonLib.MarketBoard
     public class MarketCache : IMarketCache
     {
         private IUniversalis _universalis;
-        
+
         private readonly MediatorService? _mediator;
         private ConcurrentDictionary<(uint,uint), byte> requestedItems = new ConcurrentDictionary<(uint,uint), byte>();
         private Dictionary<(uint, uint), MarketPricing> _marketBoardCache = new Dictionary<(uint, uint), MarketPricing>();
@@ -78,7 +81,7 @@ namespace CriticalCommonLib.MarketBoard
                 AutomaticCheckTimer.Stop();
             }
         }
-        
+
         public MarketCache(IUniversalis universalis, MediatorService? mediator, IDalamudPluginInterface pluginInterfaceService)
         {
             _universalis = universalis;
@@ -99,14 +102,14 @@ namespace CriticalCommonLib.MarketBoard
             }
             _universalis.ItemPriceRetrieved += UniversalisOnItemPriceRetrieved;
         }
-        
+
         private bool _disposed;
         public void Dispose()
         {
             Dispose(true);
             GC.SuppressFinalize(this);
         }
-        
+
         private void Dispose(bool disposing)
         {
             if(!_disposed && disposing)
@@ -115,9 +118,9 @@ namespace CriticalCommonLib.MarketBoard
                 _universalis.ItemPriceRetrieved -= UniversalisOnItemPriceRetrieved;
                 SaveCacheFile();
             }
-            _disposed = true;         
+            _disposed = true;
         }
-        
+
         ~MarketCache()
         {
 #if DEBUG
@@ -160,12 +163,12 @@ namespace CriticalCommonLib.MarketBoard
                 Service.Log.Error("Error while parsing saved universalis data, " + e.Message);
             }
         }
-        
+
         private List<T> LoadCsv<T>(string fileName, string title) where T : ICsv, new()
         {
             try
             {
-                var lines = CsvLoader.LoadCsv<T>(fileName, out var failedLines, Service.ExcelCache.GameData, Service.ExcelCache.GameData.Options.DefaultExcelLanguage);
+                var lines = CsvLoader.LoadCsv<T>(fileName, false, out var failedLines, out var _, Service.ExcelCache.GameData, Service.ExcelCache.GameData.Options.DefaultExcelLanguage);
                 if (failedLines.Count != 0)
                 {
                     foreach (var failedLine in failedLines)
@@ -183,7 +186,7 @@ namespace CriticalCommonLib.MarketBoard
 
             return new List<T>();
         }
-        
+
         public void ClearCache()
         {
             _marketBoardCache = new Dictionary<(uint,uint), MarketPricing>();
@@ -280,7 +283,7 @@ namespace CriticalCommonLib.MarketBoard
         {
             if (_worldIds == null)
             {
-                _worldIds = Service.ExcelCache.GetWorldSheet().Where(c => c.IsPublic).Select(c => c.RowId).ToList();
+                _worldIds = Service.Data.GetExcelSheet<World>().Where(c => c.IsPublic).Select(c => c.RowId).ToList();
             }
 
             return GetPricing(itemId, _worldIds, forceCheck);
@@ -293,7 +296,7 @@ namespace CriticalCommonLib.MarketBoard
                 CheckCache();
             }
 
-            if (Service.ExcelCache.GetItemExSheet().GetRow(itemId)?.IsUntradable ?? true)
+            if (Service.ExcelCache.GetItemSheet().GetRowOrDefault(itemId)?.Base.IsUntradable ?? true)
             {
                 return new MarketPricing();
             }
